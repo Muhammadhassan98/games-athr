@@ -1,64 +1,158 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class MatchFinder : MonoBehaviour
 {
-    public static MatchFinder Instance;
-
-    void Awake()
+    public List<List<Gem>> FindAllMatches(Gem[,] grid)
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        List<List<Gem>> groups = new List<List<Gem>>();
+        int rows = grid.GetLength(0);
+        int cols = grid.GetLength(1);
+
+        // Horizontal runs
+        for (int r = 0; r < rows; r++)
+        {
+            int c = 0;
+            while (c < cols)
+            {
+                if (grid[r, c] == null)
+                {
+                    c++;
+                    continue;
+                }
+                GemType type = grid[r, c].Type;
+                int start = c;
+                while (c < cols && grid[r, c] != null && grid[r, c].Type == type)
+                    c++;
+                int length = c - start;
+                if (length >= 3)
+                {
+                    List<Gem> group = new List<Gem>();
+                    for (int i = start; i < start + length; i++)
+                        group.Add(grid[r, i]);
+                    groups.Add(group);
+                }
+            }
+        }
+
+        // Vertical runs
+        for (int c = 0; c < cols; c++)
+        {
+            int r = 0;
+            while (r < rows)
+            {
+                if (grid[r, c] == null)
+                {
+                    r++;
+                    continue;
+                }
+                GemType type = grid[r, c].Type;
+                int start = r;
+                while (r < rows && grid[r, c] != null && grid[r, c].Type == type)
+                    r++;
+                int length = r - start;
+                if (length >= 3)
+                {
+                    List<Gem> group = new List<Gem>();
+                    for (int i = start; i < start + length; i++)
+                        group.Add(grid[i, c]);
+                    groups.Add(group);
+                }
+            }
+        }
+
+        return MergeGroups(groups);
     }
 
-    public List<Gem> FindAllMatches(Gem[,] gems, int width, int height)
+    public List<Gem> FindMatches(Gem[,] grid)
     {
-        HashSet<Gem> matched = new HashSet<Gem>();
+        List<List<Gem>> allGroups = FindAllMatches(grid);
+        HashSet<Gem> seen = new HashSet<Gem>();
+        List<Gem> result = new List<Gem>();
 
-        // Horizontal
-        for (int y = 0; y < height; y++)
+        foreach (List<Gem> group in allGroups)
         {
-            for (int x = 0; x < width - 2; x++)
+            foreach (Gem gem in group)
             {
-                Gem g1 = gems[x, y];
-                Gem g2 = gems[x+1, y];
-                Gem g3 = gems[x+2, y];
-                if (g1 != null && g2 != null && g3 != null &&
-                    g1.Type == g2.Type && g2.Type == g3.Type)
-                {
-                    matched.Add(g1); matched.Add(g2); matched.Add(g3);
-                    int nx = x + 3;
-                    while (nx < width && gems[nx, y] != null && gems[nx, y].Type == g1.Type)
-                    {
-                        matched.Add(gems[nx, y]);
-                        nx++;
-                    }
-                }
+                if (seen.Add(gem))
+                    result.Add(gem);
             }
         }
 
-        // Vertical
-        for (int x = 0; x < width; x++)
+        return result;
+    }
+
+    public bool IsMatch(Gem[,] grid)
+    {
+        return FindMatches(grid).Count > 0;
+    }
+
+    private List<List<Gem>> MergeGroups(List<List<Gem>> groups)
+    {
+        List<List<Gem>> merged = new List<List<Gem>>();
+
+        foreach (List<Gem> group in groups)
         {
-            for (int y = 0; y < height - 2; y++)
+            bool foundOverlap = false;
+            foreach (List<Gem> existing in merged)
             {
-                Gem g1 = gems[x, y];
-                Gem g2 = gems[x, y+1];
-                Gem g3 = gems[x, y+2];
-                if (g1 != null && g2 != null && g3 != null &&
-                    g1.Type == g2.Type && g2.Type == g3.Type)
+                // Check if any gem in group is in existing
+                foreach (Gem gem in group)
                 {
-                    matched.Add(g1); matched.Add(g2); matched.Add(g3);
-                    int ny = y + 3;
-                    while (ny < height && gems[x, ny] != null && gems[x, ny].Type == g1.Type)
+                    if (existing.Contains(gem))
                     {
-                        matched.Add(gems[x, ny]);
-                        ny++;
+                        // Merge group into existing
+                        foreach (Gem g in group)
+                        {
+                            if (!existing.Contains(g))
+                                existing.Add(g);
+                        }
+                        foundOverlap = true;
+                        break;
                     }
                 }
+                if (foundOverlap) break;
+            }
+
+            if (!foundOverlap)
+                merged.Add(new List<Gem>(group));
+        }
+
+        // Second pass to catch transitive merges
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int i = 0; i < merged.Count; i++)
+            {
+                for (int j = i + 1; j < merged.Count; j++)
+                {
+                    bool overlaps = false;
+                    foreach (Gem gem in merged[i])
+                    {
+                        if (merged[j].Contains(gem))
+                        {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if (overlaps)
+                    {
+                        foreach (Gem g in merged[j])
+                        {
+                            if (!merged[i].Contains(g))
+                                merged[i].Add(g);
+                        }
+                        merged.RemoveAt(j);
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed) break;
             }
         }
 
-        return new List<Gem>(matched);
+        return merged;
     }
 }
