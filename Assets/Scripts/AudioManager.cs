@@ -1,50 +1,103 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class AudioManager : MonoBehaviour
 {
-    public static AudioManager Instance;
+    public static AudioManager Instance { get; private set; }
 
-    private AudioSource audioSource;
+    [SerializeField] private AudioClip matchClip;
+    [SerializeField] private AudioClip swapClip;
+    [SerializeField] private AudioClip invalidSwapClip;
+    [SerializeField] private AudioClip gameOverClip;
+    [SerializeField] private AudioClip levelCompleteClip;
 
-    void Awake()
+    private AudioSource matchSource;
+    private AudioSource swapSource;
+    private AudioSource invalidSource;
+    private AudioSource gameOverSource;
+    private AudioSource levelCompleteSource;
+
+    private void Awake()
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
-        audioSource = gameObject.AddComponent<AudioSource>();
+        if (Instance != null)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+
+        matchSource = gameObject.AddComponent<AudioSource>();
+        swapSource = gameObject.AddComponent<AudioSource>();
+        invalidSource = gameObject.AddComponent<AudioSource>();
+        gameOverSource = gameObject.AddComponent<AudioSource>();
+        levelCompleteSource = gameObject.AddComponent<AudioSource>();
+    }
+
+    private void Start()
+    {
+        if (GemSwapper.Instance != null)
+        {
+            GemSwapper.Instance.OnSwapAttempted += HandleSwapAttempted;
+            GemSwapper.Instance.OnInvalidSwap += PlayInvalidSwap;
+        }
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnGameOver += PlayGameOver;
+            GameManager.Instance.OnLevelComplete += PlayLevelComplete;
+        }
+    }
+
+    private void HandleSwapAttempted(bool success)
+    {
+        if (success)
+            PlaySwap();
     }
 
     public void PlayMatch()
     {
-        if (audioSource == null) return;
-        // Generate a simple beep sound procedurally
-        audioSource.PlayOneShot(GenerateBeep(660f, 0.1f));
+        if (matchClip != null)
+            matchSource.PlayOneShot(matchClip);
     }
 
     public void PlaySwap()
     {
-        if (audioSource == null) return;
-        audioSource.PlayOneShot(GenerateBeep(440f, 0.05f));
+        if (swapClip != null)
+            swapSource.PlayOneShot(swapClip);
     }
 
-    public void PlayFail()
+    public void PlayInvalidSwap()
     {
-        if (audioSource == null) return;
-        audioSource.PlayOneShot(GenerateBeep(220f, 0.15f));
+        if (invalidSwapClip != null)
+            invalidSource.PlayOneShot(invalidSwapClip);
     }
 
-    AudioClip GenerateBeep(float frequency, float duration)
+    public void PlayGameOver()
     {
-        int sampleRate = 44100;
-        int samples = (int)(sampleRate * duration);
-        AudioClip clip = AudioClip.Create("beep", samples, 1, sampleRate, false);
-        float[] data = new float[samples];
-        for (int i = 0; i < samples; i++)
+        if (gameOverClip != null)
+            gameOverSource.PlayOneShot(gameOverClip);
+    }
+
+    public void PlayLevelComplete()
+    {
+        if (levelCompleteClip != null)
+            levelCompleteSource.PlayOneShot(levelCompleteClip);
+    }
+
+    private void OnDestroy()
+    {
+        if (GemSwapper.Instance != null)
         {
-            float t = (float)i / sampleRate;
-            float envelope = 1f - (t / duration);
-            data[i] = Mathf.Sin(2 * Mathf.PI * frequency * t) * envelope * 0.5f;
+            GemSwapper.Instance.OnSwapAttempted -= HandleSwapAttempted;
+            GemSwapper.Instance.OnInvalidSwap -= PlayInvalidSwap;
         }
-        clip.SetData(data, 0);
-        return clip;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnGameOver -= PlayGameOver;
+            GameManager.Instance.OnLevelComplete -= PlayLevelComplete;
+        }
     }
 }

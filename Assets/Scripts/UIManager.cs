@@ -1,62 +1,114 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
 
 public class UIManager : MonoBehaviour
 {
-    public static UIManager Instance;
+    public static UIManager Instance { get; private set; }
 
-    [Header("UI Elements")]
-    public TextMeshProUGUI scoreText;
-    public TextMeshProUGUI movesText;
-    public TextMeshProUGUI targetText;
-    public TextMeshProUGUI highScoreText;
+    [SerializeField] private TextMeshProUGUI scoreText;
+    [SerializeField] private TextMeshProUGUI movesText;
+    [SerializeField] private TextMeshProUGUI finalScoreText;
+    [SerializeField] private TextMeshProUGUI gameOverScoreText;
 
-    [Header("Panels")]
-    public GameObject winPanel;
-    public GameObject gameOverPanel;
+    [SerializeField] private GameObject gameOverPanel;
+    [SerializeField] private GameObject levelCompletePanel;
 
-    void Awake()
+    private void Awake()
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        if (Instance != null)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+        HideAllPanels();
     }
 
-    void Start()
+    private void Start()
     {
-        if (winPanel) winPanel.SetActive(false);
-        if (gameOverPanel) gameOverPanel.SetActive(false);
-        UpdateScore(0);
-        if (highScoreText) highScoreText.text = $"Best: {ScoreManager.Instance?.HighScore}";
+        if (ScoreManager.Instance != null)
+            ScoreManager.Instance.OnScoreChanged += UpdateScore;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnGameOver += HandleGameOver;
+            GameManager.Instance.OnLevelComplete += HandleLevelComplete;
+            GameManager.Instance.OnMovesChanged += UpdateMoves;
+        }
+    }
+
+    private void HandleGameOver()
+    {
+        int finalScore = ScoreManager.Instance != null ? ScoreManager.Instance.Score : 0;
+        ShowGameOver(finalScore);
+    }
+
+    private void HandleLevelComplete()
+    {
+        int finalScore = ScoreManager.Instance != null ? ScoreManager.Instance.Score : 0;
+        ShowLevelComplete(finalScore);
     }
 
     public void UpdateScore(int score)
     {
-        if (scoreText) scoreText.text = $"Score: {score}";
+        if (scoreText != null)
+            scoreText.text = "Score: " + score;
     }
 
     public void UpdateMoves(int moves)
     {
-        if (movesText) movesText.text = $"Moves: {moves}";
+        if (movesText != null)
+            movesText.text = "Moves: " + moves;
     }
 
-    public void UpdateTarget(int target)
+    public void ShowGameOver(int finalScore)
     {
-        if (targetText) targetText.text = $"Target: {target}";
+        if (gameOverPanel != null)
+            gameOverPanel.SetActive(true);
+
+        if (gameOverScoreText != null)
+            gameOverScoreText.text = "Score: " + finalScore;
     }
 
-    public void ShowWin()
+    public void ShowLevelComplete(int finalScore)
     {
-        if (winPanel) winPanel.SetActive(true);
+        if (levelCompletePanel != null)
+            levelCompletePanel.SetActive(true);
+
+        if (finalScoreText != null)
+            finalScoreText.text = "Score: " + finalScore;
     }
 
-    public void ShowGameOver()
+    public void HideAllPanels()
     {
-        if (gameOverPanel) gameOverPanel.SetActive(true);
+        if (gameOverPanel != null)
+            gameOverPanel.SetActive(false);
+
+        if (levelCompletePanel != null)
+            levelCompletePanel.SetActive(false);
     }
 
-    public void OnRestartButton()
+    public void OnRestartButtonClicked()
     {
-        GameManager.Instance?.RestartGame();
+        if (GameManager.Instance != null)
+            GameManager.Instance.RestartGame();
+
+        HideAllPanels();
+    }
+
+    private void OnDestroy()
+    {
+        if (ScoreManager.Instance != null)
+            ScoreManager.Instance.OnScoreChanged -= UpdateScore;
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnGameOver -= HandleGameOver;
+            GameManager.Instance.OnLevelComplete -= HandleLevelComplete;
+            GameManager.Instance.OnMovesChanged -= UpdateMoves;
+        }
     }
 }

@@ -1,214 +1,305 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class Board : MonoBehaviour
 {
-    public static Board Instance;
+    public const int Rows = 8;
+    public const int Cols = 8;
+    private const float CellSize = 1.0f;
 
-    [Header("Board Settings")]
-    public int width = 8;
-    public int height = 8;
-    public float gemSize = 1f;
-    public float gemSpacing = 0.1f;
+    [SerializeField] private GameObject gemPrefab;
 
-    public Gem[,] Gems { get; private set; }
-    private bool isProcessing;
+    private Gem[,] gems = new Gem[Rows, Cols];
+    private Dictionary<GemType, Queue<Gem>> gemPool = new Dictionary<GemType, Queue<Gem>>();
 
-    void Awake()
+    private MatchFinder matchFinder;
+
+    public event Action OnBoardStable;
+
+    private void Awake()
     {
-        if (Instance == null) Instance = this;
-        else Destroy(gameObject);
+        matchFinder = GetComponent<MatchFinder>();
+        if (matchFinder == null)
+            matchFinder = gameObject.AddComponent<MatchFinder>();
+
+        foreach (GemType type in Enum.GetValues(typeof(GemType)))
+            gemPool[type] = new Queue<Gem>();
     }
 
-    void Start()
+    public void Initialize()
     {
-        Gems = new Gem[width, height];
-        FillBoard();
-        CenterCamera();
-    }
-
-    void CenterCamera()
-    {
-        float totalWidth = (width - 1) * (gemSize + gemSpacing);
-        float totalHeight = (height - 1) * (gemSize + gemSpacing);
-        Camera.main.transform.position = new Vector3(totalWidth / 2f, totalHeight / 2f, -10f);
-        Camera.main.orthographicSize = Mathf.Max(totalWidth, totalHeight) / 2f + 1f;
-    }
-
-    void FillBoard()
-    {
-        for (int x = 0; x < width; x++)
-            for (int y = 0; y < height; y++)
-                SpawnGem(x, y, GetRandomTypeWithoutMatch(x, y));
-    }
-
-    Gem.GemType GetRandomTypeWithoutMatch(int x, int y)
-    {
-        List<Gem.GemType> excluded = new List<Gem.GemType>();
-
-        if (x >= 2 && Gems[x-1, y] != null && Gems[x-2, y] != null &&
-            Gems[x-1, y].Type == Gems[x-2, y].Type)
-            excluded.Add(Gems[x-1, y].Type);
-
-        if (y >= 2 && Gems[x, y-1] != null && Gems[x, y-2] != null &&
-            Gems[x, y-1].Type == Gems[x, y-2].Type)
-            excluded.Add(Gems[x, y-1].Type);
-
-        List<Gem.GemType> allTypes = new List<Gem.GemType>((Gem.GemType[])System.Enum.GetValues(typeof(Gem.GemType)));
-        foreach (var e in excluded) allTypes.Remove(e);
-
-        return allTypes[Random.Range(0, allTypes.Count)];
-    }
-
-    public void SpawnGem(int x, int y, Gem.GemType type)
-    {
-        Vector3 pos = GetWorldPosition(x, y);
-        GameObject go = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        go.name = $"Gem_{x}_{y}";
-        go.transform.position = pos;
-        go.transform.localScale = Vector3.one * gemSize;
-        go.transform.SetParent(transform);
-
-        // Remove 3D collider, add 2D
-        Destroy(go.GetComponent<MeshCollider>());
-        go.AddComponent<BoxCollider2D>();
-
-        // Remove 3D renderer, add sprite renderer
-        Destroy(go.GetComponent<MeshRenderer>());
-        Destroy(go.GetComponent<MeshFilter>());
-
-        Gem gem = go.AddComponent<Gem>();
-        gem.Init(type, x, y);
-        Gems[x, y] = gem;
-    }
-
-    public Vector3 GetWorldPosition(int x, int y)
-    {
-        return new Vector3(x * (gemSize + gemSpacing), y * (gemSize + gemSpacing), 0);
-    }
-
-    public IEnumerator SwapGems(int x1, int y1, int x2, int y2)
-    {
-        isProcessing = true;
-
-        Gem gem1 = Gems[x1, y1];
-        Gem gem2 = Gems[x2, y2];
-
-        Gems[x1, y1] = gem2;
-        Gems[x2, y2] = gem1;
-        gem1.Column = x2; gem1.Row = y2;
-        gem2.Column = x1; gem2.Row = y1;
-
-        gem1.MoveTo(GetWorldPosition(x2, y2));
-        gem2.MoveTo(GetWorldPosition(x1, y1));
-
-        yield return new WaitUntil(() => !gem1.IsMoving() && !gem2.IsMoving());
-
-        List<Gem> matches = MatchFinder.Instance.FindAllMatches(Gems, width, height);
-
-        if (matches.Count == 0)
+        // Clear existing gems back to pool
+        for (int r = 0; r < Rows; r++)
         {
-            // Swap back
-            Gems[x1, y1] = gem1;
-            Gems[x2, y2] = gem2;
-            gem1.Column = x1; gem1.Row = y1;
-            gem2.Column = x2; gem2.Row = y2;
-            gem1.MoveTo(GetWorldPosition(x1, y1));
-            gem2.MoveTo(GetWorldPosition(x2, y2));
-            yield return new WaitUntil(() => !gem1.IsMoving() && !gem2.IsMoving());
+            for (int c = 0; c < Cols; c++)
+            {
+                if (gems[r, c] != null)
+                {
+                    ReturnToPool(gems[r, c]);
+                    gems[r, c] = null;
+                }
+            }
+        }
+
+        // Spawn all gems ensuring no initial 3-in-a-row matches
+        for (int r = 0; r < Rows; r++)
+        {
+            for (int c = 0; c < Cols; c++)
+            {
+                GemType type = GetRandomTypeNoMatch(r, c);
+                gems[r, c] = SpawnGem(type, r, c);
+            }
+        }
+    }
+
+    private GemType GetRandomTypeNoMatch(int row, int col)
+    {
+        GemType[] allTypes = (GemType[])Enum.GetValues(typeof(GemType));
+        List<GemType> candidates = new List<GemType>(allTypes);
+
+        // Shuffle
+        for (int i = candidates.Count - 1; i > 0; i--)
+        {
+            int j = UnityEngine.Random.Range(0, i + 1);
+            GemType tmp = candidates[i];
+            candidates[i] = candidates[j];
+            candidates[j] = tmp;
+        }
+
+        foreach (GemType type in candidates)
+        {
+            if (!WouldCauseMatch(row, col, type))
+                return type;
+        }
+
+        return candidates[0];
+    }
+
+    private bool WouldCauseMatch(int row, int col, GemType type)
+    {
+        // Check horizontal match (two to the left)
+        if (col >= 2 &&
+            gems[row, col - 1] != null && gems[row, col - 1].Type == type &&
+            gems[row, col - 2] != null && gems[row, col - 2].Type == type)
+            return true;
+
+        // Check vertical match (two below, since we fill bottom-up by row)
+        if (row >= 2 &&
+            gems[row - 1, col] != null && gems[row - 1, col].Type == type &&
+            gems[row - 2, col] != null && gems[row - 2, col].Type == type)
+            return true;
+
+        return false;
+    }
+
+    public Gem SpawnGem(GemType type, int row, int col)
+    {
+        Gem gem = null;
+
+        if (gemPool.ContainsKey(type) && gemPool[type].Count > 0)
+        {
+            gem = gemPool[type].Dequeue();
+            gem.gameObject.SetActive(true);
         }
         else
         {
-            GameManager.Instance.UseMove();
-            yield return StartCoroutine(ProcessMatches());
-        }
-
-        isProcessing = false;
-    }
-
-    IEnumerator ProcessMatches()
-    {
-        while (true)
-        {
-            List<Gem> matches = MatchFinder.Instance.FindAllMatches(Gems, width, height);
-            if (matches.Count == 0) break;
-
-            ScoreManager.Instance.AddScore(matches.Count * 50);
-            AudioManager.Instance?.PlayMatch();
-
-            foreach (Gem g in matches)
+            GameObject go;
+            if (gemPrefab != null)
             {
-                if (Gems[g.Column, g.Row] == g)
-                    Gems[g.Column, g.Row] = null;
-                Destroy(g.gameObject);
+                go = Instantiate(gemPrefab, transform);
+            }
+            else
+            {
+                go = new GameObject("Gem_" + type);
+                go.transform.SetParent(transform);
+                go.AddComponent<SpriteRenderer>();
+                go.AddComponent<CircleCollider2D>();
             }
 
-            yield return new WaitForSeconds(0.2f);
-            yield return StartCoroutine(ApplyGravity());
-            yield return new WaitForSeconds(0.1f);
-            yield return StartCoroutine(FillEmpty());
-            yield return new WaitForSeconds(0.2f);
+            gem = go.GetComponent<Gem>();
+            if (gem == null)
+                gem = go.AddComponent<Gem>();
         }
 
-        GameManager.Instance.CheckWin();
+        gem.transform.position = GridToWorld(row, col);
+        gem.Initialize(type, row, col);
+        gems[row, col] = gem;
+        return gem;
     }
 
-    IEnumerator ApplyGravity()
+    public Gem GetGem(int row, int col)
     {
-        bool moved = false;
-        for (int x = 0; x < width; x++)
+        if (!IsValidPosition(row, col)) return null;
+        return gems[row, col];
+    }
+
+    public void SetGem(int row, int col, Gem gem)
+    {
+        if (!IsValidPosition(row, col)) return;
+        gems[row, col] = gem;
+        if (gem != null)
         {
-            for (int y = 1; y < height; y++)
+            gem.Row = row;
+            gem.Col = col;
+        }
+    }
+
+    public bool IsValidPosition(int row, int col)
+    {
+        return row >= 0 && row < Rows && col >= 0 && col < Cols;
+    }
+
+    public Vector3 GridToWorld(int row, int col)
+    {
+        float startX = -(Cols * CellSize) / 2f + CellSize / 2f;
+        float startY = -(Rows * CellSize) / 2f + CellSize / 2f;
+        return new Vector3(startX + col * CellSize, startY + row * CellSize, 0f);
+    }
+
+    public Vector2Int WorldToGrid(Vector3 world)
+    {
+        float startX = -(Cols * CellSize) / 2f + CellSize / 2f;
+        float startY = -(Rows * CellSize) / 2f + CellSize / 2f;
+        int col = Mathf.RoundToInt((world.x - startX) / CellSize);
+        int row = Mathf.RoundToInt((world.y - startY) / CellSize);
+        return new Vector2Int(row, col);
+    }
+
+    public void ClearGems(List<Gem> toRemove)
+    {
+        foreach (Gem gem in toRemove)
+        {
+            if (gem == null) continue;
+            int r = gem.Row;
+            int c = gem.Col;
+            if (IsValidPosition(r, c) && gems[r, c] == gem)
+                gems[r, c] = null;
+            ReturnToPool(gem);
+        }
+    }
+
+    private void ReturnToPool(Gem gem)
+    {
+        if (gem == null) return;
+        gem.gameObject.SetActive(false);
+        if (!gemPool.ContainsKey(gem.Type))
+            gemPool[gem.Type] = new Queue<Gem>();
+        gemPool[gem.Type].Enqueue(gem);
+    }
+
+    private IEnumerator ApplyGravity()
+    {
+        bool anyMoved = false;
+
+        for (int c = 0; c < Cols; c++)
+        {
+            int writeRow = 0;
+            for (int r = 0; r < Rows; r++)
             {
-                if (Gems[x, y] == null) continue;
-                int fallY = y;
-                while (fallY > 0 && Gems[x, fallY - 1] == null) fallY--;
-                if (fallY != y)
+                if (gems[r, c] != null)
                 {
-                    Gems[x, fallY] = Gems[x, y];
-                    Gems[x, y] = null;
-                    Gems[x, fallY].Row = fallY;
-                    Gems[x, fallY].MoveTo(GetWorldPosition(x, fallY));
-                    moved = true;
+                    if (r != writeRow)
+                    {
+                        gems[writeRow, c] = gems[r, c];
+                        gems[r, c] = null;
+                        gems[writeRow, c].Row = writeRow;
+                        gems[writeRow, c].Col = c;
+                        Vector3 target = GridToWorld(writeRow, c);
+                        StartCoroutine(gems[writeRow, c].AnimateToPosition(target));
+                        anyMoved = true;
+                    }
+                    writeRow++;
                 }
             }
         }
 
-        if (moved)
+        if (anyMoved)
+            yield return new WaitForSeconds(0.25f);
+    }
+
+    private IEnumerator RefillBoard()
+    {
+        bool anySpawned = false;
+
+        for (int c = 0; c < Cols; c++)
         {
+            int emptyCount = 0;
+            for (int r = 0; r < Rows; r++)
+            {
+                if (gems[r, c] == null)
+                {
+                    emptyCount++;
+                    GemType type = (GemType)UnityEngine.Random.Range(0, Enum.GetValues(typeof(GemType)).Length);
+                    Gem gem = SpawnGem(type, r, c);
+                    // Spawn above board then animate down
+                    gem.transform.position = GridToWorld(Rows + emptyCount, c);
+                    StartCoroutine(gem.AnimateToPosition(GridToWorld(r, c)));
+                    anySpawned = true;
+                }
+            }
+        }
+
+        if (anySpawned)
             yield return new WaitForSeconds(0.3f);
-            bool anyMoving = true;
-            while (anyMoving)
-            {
-                anyMoving = false;
-                for (int x = 0; x < width; x++)
-                    for (int y = 0; y < height; y++)
-                        if (Gems[x, y] != null && Gems[x, y].IsMoving())
-                            anyMoving = true;
-                if (anyMoving) yield return null;
-            }
-        }
     }
 
-    IEnumerator FillEmpty()
+    public void TriggerProcessBoard(List<Gem> matchedGems)
     {
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                if (Gems[x, y] == null)
-                {
-                    Gem.GemType type = (Gem.GemType)Random.Range(0, System.Enum.GetValues(typeof(Gem.GemType)).Length);
-                    SpawnGem(x, y, type);
-                    Gems[x, y].transform.position = GetWorldPosition(x, height);
-                    Gems[x, y].MoveTo(GetWorldPosition(x, y));
-                }
-            }
-        }
-
-        yield return new WaitForSeconds(0.3f);
+        StartCoroutine(ProcessBoard(matchedGems));
     }
 
-    public bool IsProcessing() => isProcessing;
+    private IEnumerator ProcessBoard(List<Gem> matchedGems)
+    {
+        // Handle the first set of matches passed in
+        if (matchedGems != null && matchedGems.Count > 0)
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnMatchFound(matchedGems);
+
+            if (AudioManager.Instance != null)
+                AudioManager.Instance.PlayMatch();
+
+            ClearGems(matchedGems);
+            yield return new WaitForSeconds(0.1f);
+        }
+
+        yield return StartCoroutine(ApplyGravity());
+        yield return StartCoroutine(RefillBoard());
+        yield return new WaitForSeconds(0.1f);
+
+        // Check for chain reactions
+        List<Gem> newMatches = matchFinder.FindMatches(gems);
+        while (newMatches != null && newMatches.Count > 0)
+        {
+            if (ScoreManager.Instance != null)
+                ScoreManager.Instance.IncrementCombo();
+
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnMatchFound(newMatches);
+
+            if (AudioManager.Instance != null)
+                AudioManager.Instance.PlayMatch();
+
+            ClearGems(newMatches);
+            yield return new WaitForSeconds(0.1f);
+
+            yield return StartCoroutine(ApplyGravity());
+            yield return StartCoroutine(RefillBoard());
+            yield return new WaitForSeconds(0.1f);
+
+            newMatches = matchFinder.FindMatches(gems);
+        }
+
+        if (ScoreManager.Instance != null)
+            ScoreManager.Instance.ResetCombo();
+
+        OnBoardStable?.Invoke();
+    }
+
+    public Gem[,] GetGrid()
+    {
+        return gems;
+    }
 }

@@ -83,7 +83,6 @@ public class Gem : MonoBehaviour
 
         while (IsSelected)
         {
-            // Lerp to large
             float t = 0f;
             while (t < 1f && IsSelected)
             {
@@ -93,7 +92,6 @@ public class Gem : MonoBehaviour
                 yield return null;
             }
 
-            // Lerp back to normal
             t = 0f;
             while (t < 1f && IsSelected)
             {
